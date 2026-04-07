@@ -7,6 +7,7 @@ import os
 import threading
 import json
 from datetime import datetime
+
 from trending_content import get_content
 from app import ShortsGenerator, cleanup_video_files
 from youtube_shorts_uploader import YouTubeShortsUploader
@@ -14,21 +15,23 @@ from youtube_shorts_uploader import YouTubeShortsUploader
 app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
 CORS(app)
 
-API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("RIDDLE_API_KEY", "")
+API_KEY = os.environ.get("GROQ_API_KEY", "")
 JOBS = {}  # job_id -> status dict
 
 
-def run_pipeline(job_id, auto_upload=False):
+def _run_pipeline_job(job_id, content_type="skeleton", auto_upload=False):
+    """Background thread: generate content → video → (upload)"""
     try:
         JOBS[job_id]["status"] = "generating_script"
-        content = get_content(API_KEY)
+        content = get_content(API_KEY, content_type=content_type)
         JOBS[job_id]["content"] = content
         JOBS[job_id]["status"] = "rendering_video"
 
         generator = ShortsGenerator()
-        final_path = generator.generate_video(content, output_path=f"output_{job_id}.mp4")
+        output_path = f"output_{job_id}.mp4"
+        final_path = generator.generate_video(content, output_path=output_path)
 
-        if not final_path or not os.path.exists(final_path):
+        if not final_path:
             JOBS[job_id]["status"] = "error"
             JOBS[job_id]["error"] = "Video generation failed"
             return
@@ -47,21 +50,30 @@ def run_pipeline(job_id, auto_upload=False):
             if video_id:
                 JOBS[job_id]["youtube_url"] = f"https://youtube.com/shorts/{video_id}"
                 JOBS[job_id]["status"] = "uploaded"
+                cleanup_video_files(final_path)
             else:
                 JOBS[job_id]["status"] = "upload_failed"
 
     except Exception as e:
         JOBS[job_id]["status"] = "error"
         JOBS[job_id]["error"] = str(e)
+        print(f"Job {job_id} error: {e}")
 
+
+# ─── API Routes ───────────────────────────────────────────────────────────────
 
 @app.route("/api/generate", methods=["POST"])
 def generate():
     data = request.json or {}
+    content_type = data.get("content_type", "skeleton")  # skeleton | trending | challenge
     auto_upload = data.get("auto_upload", False)
     job_id = datetime.now().strftime("%Y%m%d%H%M%S")
-    JOBS[job_id] = {"status": "queued", "job_id": job_id}
-    thread = threading.Thread(target=run_pipeline, args=(job_id, auto_upload))
+    JOBS[job_id] = {"status": "queued", "job_id": job_id, "content_type": content_type}
+    thread = threading.Thread(
+        target=_run_pipeline_job,
+        args=(job_id, content_type, auto_upload),
+        daemon=True
+    )
     thread.start()
     return jsonify({"job_id": job_id})
 
@@ -95,10 +107,11 @@ def upload(job_id):
         )
         video_id = uploader.upload_short(job["video_path"], job["content"])
         if video_id:
-            job["youtube_url"] = f"https://youtube.com/shorts/{video_id}"
+            url = f"https://youtube.com/shorts/{video_id}"
+            job["youtube_url"] = url
             job["status"] = "uploaded"
-            return jsonify({"success": True, "url": job["youtube_url"]})
-        return jsonify({"success": False})
+            return jsonify({"success": True, "url": url})
+        return jsonify({"success": False, "error": "Upload returned no video_id"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -112,12 +125,21 @@ def history():
     return jsonify([])
 
 
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok", "groq_key_set": bool(API_KEY)})
+
+
+# ─── Frontend Catch-all ───────────────────────────────────────────────────────
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
-    if path and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
+    static = app.static_folder
+    if static and path and os.path.exists(os.path.join(static, path)):
+        return send_from_directory(static, path)
+    if static and os.path.exists(os.path.join(static, 'index.html')):
+        return send_from_directory(static, 'index.html')
+    return jsonify({"message": "auto-shorts-generator API running"})
 
 
 if __name__ == "__main__":

@@ -3,55 +3,99 @@ load_dotenv()
 
 import os
 from trend_engine import get_best_topic
-from trending_content import generate_script, generate_title_and_tags
+from trending_content import get_content, generate_script, generate_title_and_tags
 from voice_engine import generate_voice, words_to_caption_segments
 from video_engine import assemble_video
 from youtube_shorts_uploader import YouTubeShortsUploader
 
 
-def run_pipeline(auto_upload=False, output_path="short.mp4"):
-    api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("RIDDLE_API_KEY", "")
-    pexels_key = os.environ.get("PEXELS_API_KEY", "")
+class ShortsGenerator:
+    """Reusable generator class — used by both app.py CLI and server.py API"""
 
-    # Step 1: Trend discovery
-    print("\n[1/5] Discovering trending topic...")
-    topic = get_best_topic()
-    print(f"Topic: {topic}")
+    def generate_video(self, content, output_path="short.mp4",
+                       local_footage_folder=None):
+        """
+        Takes a content dict (topic, script, title, tags, hook, content_type)
+        and produces the final .mp4. Returns output_path or None on failure.
+        """
+        pexels_key = os.environ.get("PEXELS_API_KEY", "")
 
-    # Step 2: Script generation
-    print("\n[2/5] Generating script...")
-    script = generate_script(topic, api_key)
-    if not script:
-        print("Script generation failed")
+        # Auto-select footage folder based on content type
+        if local_footage_folder is None:
+            content_type = content.get("content_type", "trending")
+            if content_type == "skeleton" and os.path.exists("skeleton"):
+                local_footage_folder = "skeleton"
+            elif content_type == "challenge" and os.path.exists("gameplay"):
+                local_footage_folder = "gameplay"
+
+        print("\n[voice] Generating voiceover...")
+        voice_path = output_path.replace(".mp4", "_voice.mp3")
+        word_timestamps = generate_voice(content["script"], voice_path)
+        caption_segments = words_to_caption_segments(word_timestamps, words_per_caption=3)
+        print(f"Captions: {len(caption_segments)} segments")
+
+        print("\n[video] Assembling video...")
+        try:
+            final_path = assemble_video(
+                topic=content["topic"],
+                voice_path=voice_path,
+                word_timestamps=word_timestamps,
+                caption_segments=caption_segments,
+                output_path=output_path,
+                pexels_key=pexels_key,
+                local_footage_folder=local_footage_folder,
+                hook_text=content.get("hook")
+            )
+        finally:
+            if os.path.exists(voice_path):
+                os.remove(voice_path)
+
+        return final_path if os.path.exists(final_path) else None
+
+
+def cleanup_video_files(*paths):
+    """Remove temp video files after upload"""
+    for p in paths:
+        if p and os.path.exists(p):
+            try:
+                os.remove(p)
+                print(f"Cleaned: {p}")
+            except Exception as e:
+                print(f"Cleanup error: {e}")
+
+
+def run_pipeline(auto_upload=False, output_path="short.mp4",
+                 content_type="skeleton"):
+    """
+    Full pipeline: trend → script → voice → video → (upload)
+    content_type: 'skeleton' | 'trending' | 'challenge'
+    """
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        print("ERROR: GROQ_API_KEY not set in .env")
         return None
-    title, tags = generate_title_and_tags(topic, script, api_key)
-    print(f"Title: {title}")
-    content = {"topic": topic, "script": script, "title": title, "tags": tags}
 
-    # Step 3: Voice generation
-    print("\n[3/5] Generating voiceover (edge-tts)...")
-    voice_path = "voice.mp3"
-    word_timestamps = generate_voice(script, voice_path)
-    caption_segments = words_to_caption_segments(word_timestamps, words_per_caption=4)
-    print(f"Captions: {len(caption_segments)} segments")
+    # Step 1: Content
+    print(f"\n[1/4] Generating {content_type} content...")
+    content = get_content(api_key, content_type=content_type)
+    print(f"Topic : {content['topic']}")
+    print(f"Title : {content['title']}")
+    print(f"Hook  : {content['hook']}")
 
-    # Step 4: Video assembly
-    print("\n[4/5] Assembling video...")
-    final_path = assemble_video(
-        topic=topic,
-        voice_path=voice_path,
-        word_timestamps=word_timestamps,
-        caption_segments=caption_segments,
-        output_path=output_path,
-        pexels_key=pexels_key
-    )
+    # Step 2: Video
+    print("\n[2/4] Generating voice + assembling video...")
+    generator = ShortsGenerator()
+    final_path = generator.generate_video(content, output_path=output_path)
 
-    if os.path.exists(voice_path):
-        os.remove(voice_path)
+    if not final_path:
+        print("Video generation failed")
+        return None
 
-    # Step 5: Upload
-    if auto_upload and final_path:
-        print("\n[5/5] Uploading to YouTube...")
+    print(f"\n[3/4] Video saved: {final_path}")
+
+    # Step 3: Upload (optional)
+    if auto_upload:
+        print("\n[4/4] Uploading to YouTube...")
         uploader = YouTubeShortsUploader(
             client_secrets_file='client-secret.json',
             target_channel_id=os.environ.get("YOUTUBE_CHANNEL_ID", ""),
@@ -59,20 +103,24 @@ def run_pipeline(auto_upload=False, output_path="short.mp4"):
         )
         video_id = uploader.upload_short(final_path, content)
         if video_id:
-            print(f"Uploaded: https://youtube.com/shorts/{video_id}")
-        return video_id
+            url = f"https://youtube.com/shorts/{video_id}"
+            print(f"Uploaded: {url}")
+            cleanup_video_files(final_path)
+            return url
+        print("Upload failed")
+        return None
 
     return final_path
 
 
 if __name__ == "__main__":
-    result = run_pipeline(auto_upload=False)
-    if result and os.path.exists(result):
+    import sys
+    ctype = sys.argv[1] if len(sys.argv) > 1 else "skeleton"
+    print(f"Running pipeline — content type: {ctype}")
+    result = run_pipeline(auto_upload=False, content_type=ctype)
+    if result:
         upload = input("\nUpload to YouTube? (y/n): ").strip().lower()
         if upload == 'y':
-            api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("RIDDLE_API_KEY", "")
-            pexels_key = os.environ.get("PEXELS_API_KEY", "")
-            from trending_content import generate_script, generate_title_and_tags
-            # Re-read content from the run
-            print("Upload skipped — run with auto_upload=True next time or use server.py")
-        print(f"\nVideo saved: {result}")
+            run_pipeline(auto_upload=True, content_type=ctype)
+        else:
+            print(f"Video saved: {result}")
