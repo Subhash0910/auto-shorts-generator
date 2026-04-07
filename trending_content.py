@@ -1,39 +1,56 @@
-from pytrends.request import TrendReq
 from groq import Groq
 import os
 import time
+import random
+import hashlib
+from datetime import datetime
+
+
+FALLBACK_TOPICS = [
+    "Artificial Intelligence", "Space exploration", "Human brain facts",
+    "Quantum computing", "Climate change", "Crypto markets",
+    "Sleep science", "Psychology tricks", "Stock market",
+    "Social media algorithms", "Black holes", "Future of work",
+    "Neuroscience", "Viral tech trends", "Health hacks"
+]
+
+
+def _get_daily_topics():
+    """Rotate topics daily based on date so no two days are the same"""
+    today_seed = int(datetime.now().strftime("%Y%m%d"))
+    random.seed(today_seed)
+    shuffled = FALLBACK_TOPICS.copy()
+    random.shuffle(shuffled)
+    return shuffled[:5]
 
 
 def get_trending_topics(count=5):
-    """Get top trending topics from Google Trends"""
+    """Try Google Trends first, fall back to date-rotated topic list"""
     try:
-        pytrends = TrendReq(hl='en-US', tz=330)
+        from pytrends.request import TrendReq
+        pytrends = TrendReq(hl='en-US', tz=330, timeout=(10, 25))
         trending = pytrends.trending_searches(pn='india')
         topics = trending[0].tolist()[:count]
-        print(f"Trending topics fetched: {topics}")
-        return topics
+        if topics:
+            print(f"✅ Google Trends: {topics}")
+            return topics
     except Exception as e:
-        print(f"pytrends error: {e}, using fallback topics")
-        return ["AI news", "technology", "science facts"]
+        print(f"pytrends unavailable ({e}), using curated topics")
+    return _get_daily_topics()
 
 
 def generate_script(topic, api_key):
-    """Generate a punchy YouTube Shorts script about a trending topic"""
     client = Groq(api_key=api_key)
-
-    prompt = f"""Write a YouTube Shorts script about "{topic}" which is trending right now.
+    prompt = f"""Write a YouTube Shorts script about "{topic}".
 
 STRICT RULES:
-- Maximum 80 words total (must be speakable in 45 seconds)
-- First 5 words MUST be a strong hook that stops scrolling
+- 60-80 words total (45 seconds when spoken aloud)
+- First 4-5 words MUST be a powerful hook that stops scrolling (e.g. "Nobody talks about this...", "This will change how you...")
 - Include 1-2 surprising facts most people don't know
-- Conversational tone, like texting a friend
+- Conversational, punchy tone — like texting a friend
 - End with exactly: "Follow for more!"
-- NO hashtags, NO emojis, NO stage directions, NO labels
-- Return ONLY the spoken script text, nothing else
-
-Example format:
-You won't believe what [topic] just did. [Fact 1]. [Fact 2]. Most people have no idea this is happening. Follow for more!"""
+- NO hashtags, NO emojis, NO labels like "Hook:" or "Script:"
+- Return ONLY the spoken script text"""
 
     try:
         response = client.chat.completions.create(
@@ -42,29 +59,29 @@ You won't believe what [topic] just did. [Fact 1]. [Fact 2]. Most people have no
             temperature=0.9
         )
         script = response.choices[0].message.content.strip()
-        print(f"Script generated ({len(script.split())} words)")
-        return script
+        # Remove any markdown formatting
+        for prefix in ["Script:", "Hook:", "**", "*"]:
+            script = script.replace(prefix, "").strip()
+        word_count = len(script.split())
+        print(f"Script generated ({word_count} words)")
+        return script if word_count >= 20 else None
     except Exception as e:
-        print(f"Groq error: {e}")
+        print(f"Script generation error: {e}")
         return None
 
 
 def generate_title_and_tags(topic, script, api_key):
-    """Generate SEO-optimized title and tags"""
     client = Groq(api_key=api_key)
-
-    prompt = f"""Generate a YouTube Shorts title and tags for this video about "{topic}".
-
-Script: {script[:200]}
+    prompt = f"""Generate a YouTube Shorts title and 10 tags for a video about "{topic}".
 
 RULES:
-- Title: Under 60 chars, include 1-2 emojis, make it clickable
-- Tags: 10 relevant tags as comma-separated list
-- Include #Shorts in tags always
+- Title: Under 70 chars, include 1-2 emojis, make it irresistible to click
+- Tags: 10 relevant comma-separated tags, include #Shorts
+- No explanation, just the output
 
-Format EXACTLY like this:
-Title: [title here]
-Tags: [tag1, tag2, tag3...]"""
+Format EXACTLY:
+Title: [title]
+Tags: [tag1, tag2, ...]"""
 
     try:
         response = client.chat.completions.create(
@@ -72,37 +89,31 @@ Tags: [tag1, tag2, tag3...]"""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
-        content = response.choices[0].message.content.strip()
-        lines = content.split('\n')
-        title = ""
-        tags = []
-
-        for line in lines:
+        text = response.choices[0].message.content.strip()
+        title, tags = "", []
+        for line in text.split('\n'):
             if line.lower().startswith('title:'):
-                title = line.replace('Title:', '').replace('title:', '').strip()
+                title = line.split(':', 1)[1].strip()
             elif line.lower().startswith('tags:'):
-                tag_str = line.replace('Tags:', '').replace('tags:', '').strip()
-                tags = [t.strip() for t in tag_str.split(',')]
-
+                tags = [t.strip() for t in line.split(':', 1)[1].split(',')]
         if not title:
-            title = f"🔥 {topic} - You Need To Know This!"
+            title = f"🔥 {topic} Facts You Never Knew!"
         if not tags:
-            tags = ['Shorts', 'trending', topic.lower()]
-
+            tags = ['Shorts', 'trending', topic.lower(), 'facts']
         return title, tags
     except Exception as e:
         print(f"Title/tags error: {e}")
-        return f"🔥 {topic} Facts!", ['Shorts', 'trending']
+        return f"🔥 {topic}!", ['Shorts', 'trending']
 
 
 def get_content(api_key):
-    """Main function: get trending topic + generate all content"""
+    """Main entry: get trending topic → script → title → tags"""
     topics = get_trending_topics(count=5)
 
     for topic in topics:
-        print(f"\nTrying topic: {topic}")
+        print(f"\nTrying: {topic}")
         script = generate_script(topic, api_key)
-        if script and len(script.split()) >= 20:
+        if script:
             title, tags = generate_title_and_tags(topic, script, api_key)
             return {
                 "topic": topic,
@@ -110,25 +121,24 @@ def get_content(api_key):
                 "title": title,
                 "tags": tags
             }
-        time.sleep(1)
+        time.sleep(0.5)
 
-    print("All trending topics failed, using fallback")
-    fallback_topic = "AI technology"
-    script = generate_script(fallback_topic, api_key)
+    # Hard fallback
+    topic = "AI technology"
     return {
-        "topic": fallback_topic,
-        "script": script or "AI is changing everything. The technology growing fastest right now will reshape jobs, creativity, and daily life within 5 years. Most people are completely unprepared. Follow for more!",
-        "title": "🤖 AI Is Changing Everything!",
-        "tags": ["Shorts", "AI", "technology", "trending"]
+        "topic": topic,
+        "script": "Nobody talks about how fast AI is actually moving. In the last 6 months alone, AI wrote code, passed medical exams, and created Oscar-winning visuals. Most people have no idea how close we are to a complete shift in how work happens. Follow for more!",
+        "title": "🤖 AI Is Moving Faster Than You Think!",
+        "tags": ["AI", "technology", "future", "Shorts", "trending", "facts"]
     }
 
 
 if __name__ == "__main__":
-    api_key = os.environ.get("RIDDLE_API_KEY", "")
+    api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("RIDDLE_API_KEY", "")
     content = get_content(api_key)
-    print(f"\n{'='*50}")
-    print(f"Topic: {content['topic']}")
-    print(f"Title: {content['title']}")
-    print(f"Tags: {', '.join(content['tags'])}")
+    print(f"\n{'='*55}")
+    print(f"Topic : {content['topic']}")
+    print(f"Title : {content['title']}")
+    print(f"Tags  : {', '.join(content['tags'][:5])}")
     print(f"\nScript:\n{content['script']}")
-    print(f"{'='*50}")
+    print('='*55)
