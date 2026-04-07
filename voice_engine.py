@@ -1,47 +1,77 @@
 import asyncio
 import edge_tts
-import json
 import os
-import re
+import subprocess
+import json
 
-# Best free neural voices
 VOICES = [
-    "en-US-AndrewNeural",     # Male, natural, great for facts
-    "en-US-JennyNeural",      # Female, clear, energetic
-    "en-US-GuyNeural",        # Male, deep, authoritative
-    "en-GB-RyanNeural",       # British, sounds smart
+    "en-US-AndrewNeural",
+    "en-US-JennyNeural",
+    "en-US-GuyNeural",
+    "en-GB-RyanNeural",
 ]
 
 
-async def _generate_voice(script, output_path, voice):
-    """Generate voice with word-level timestamps"""
-    communicate = edge_tts.Communicate(script, voice, rate="+15%")
+async def _generate(script, output_path, voice):
+    """Generate audio + collect word boundary events"""
+    communicate = edge_tts.Communicate(text=script, voice=voice, rate="+15%")
     word_data = []
+    audio_chunks = []
+
+    async for chunk in communicate.stream():
+        if chunk['type'] == 'audio':
+            audio_chunks.append(chunk['data'])
+        elif chunk['type'] == 'WordBoundary':
+            word_data.append({
+                'word': chunk['text'],
+                'start': chunk['offset'] / 10_000_000,
+                'duration': chunk['duration'] / 10_000_000
+            })
+
     with open(output_path, 'wb') as f:
-        async for chunk in communicate.stream():
-            if chunk['type'] == 'audio':
-                f.write(chunk['data'])
-            elif chunk['type'] == 'WordBoundary':
-                word_data.append({
-                    'word': chunk['text'],
-                    'start': chunk['offset'] / 10_000_000,  # 100ns units -> seconds
-                    'duration': chunk['duration'] / 10_000_000
-                })
+        for chunk in audio_chunks:
+            f.write(chunk)
+
     return word_data
 
 
 def generate_voice(script, output_path="voice.mp3", voice=None):
-    """Generate edge-tts voice + return word timestamps"""
     if voice is None:
         voice = VOICES[0]
-    print(f"Generating voice: {voice}")
-    word_data = asyncio.run(_generate_voice(script, output_path, voice))
-    print(f"Voice generated: {len(word_data)} words timestamped")
+    print(f"Voice: {voice}")
+
+    # edge-tts outputs webm/opus internally, convert to mp3 with ffmpeg
+    raw_path = output_path.replace('.mp3', '_raw.mp3')
+
+    word_data = asyncio.run(_generate(script, raw_path, voice))
+
+    # Convert to standard mp3 so moviepy can read it cleanly
+    cmd = ['ffmpeg', '-y', '-i', raw_path, '-ar', '44100', '-ac', '2', output_path]
+    result = subprocess.run(cmd, capture_output=True)
+    if os.path.exists(raw_path):
+        os.remove(raw_path)
+
+    if not word_data:
+        print("WARNING: No word timestamps received from edge-tts")
+        print("Falling back to gTTS voice")
+        from gtts import gTTS
+        tts = gTTS(text=script, lang='en', slow=False)
+        tts.save(output_path)
+        # Build fake timestamps from word count + estimated duration
+        from moviepy.editor import AudioFileClip
+        dur = AudioFileClip(output_path).duration
+        words = script.split()
+        time_per_word = dur / len(words)
+        word_data = [
+            {'word': w, 'start': i * time_per_word, 'duration': time_per_word}
+            for i, w in enumerate(words)
+        ]
+
+    print(f"Voice ready: {len(word_data)} words timestamped")
     return word_data
 
 
 def words_to_caption_segments(word_data, words_per_caption=4):
-    """Group words into caption segments with start/end times"""
     segments = []
     i = 0
     while i < len(word_data):
@@ -55,8 +85,7 @@ def words_to_caption_segments(word_data, words_per_caption=4):
 
 
 if __name__ == '__main__':
-    test_script = "Nobody talks about this but black holes are actually portals to other dimensions. Follow for more!"
-    words = generate_voice(test_script, 'test_voice.mp3')
-    print("Word timestamps:")
-    for w in words[:5]:
-        print(f"  {w['word']:20} {w['start']:.2f}s")
+    words = generate_voice("Nobody talks about this but black holes are actually portals. Follow for more!", 'test.mp3')
+    segs = words_to_caption_segments(words)
+    for s in segs:
+        print(f"{s['start']:.2f}s - {s['end']:.2f}s : {s['text']}")
