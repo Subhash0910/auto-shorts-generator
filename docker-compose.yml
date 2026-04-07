@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./music:/app/music
+      - ./output:/app/output
+      - ./client-secret.json:/app/client-secret.json
+      - ./youtube_credentials.pickle:/app/youtube_credentials.pickle
+    env_file:
+      - .env
+    restart: unless-stopped

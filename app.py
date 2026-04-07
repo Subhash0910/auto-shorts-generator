@@ -5,7 +5,6 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import imageio
 import math
-import time
 import os
 import random
 from gtts import gTTS
@@ -20,15 +19,15 @@ def cleanup_video_files(output_path):
         if os.path.exists(f):
             try:
                 os.remove(f)
-            except Exception as e:
-                print(f"Error deleting {f}: {e}")
+            except Exception:
+                pass
 
 
 class ShortsGenerator:
     def __init__(self):
         self.width = 1080
         self.height = 1920
-        self.fps = 30
+        self.fps = 24  # 24fps is fine for Shorts and uses less memory than 30
         self.font_bold = self._get_font()
 
     def _get_font(self):
@@ -42,30 +41,34 @@ class ShortsGenerator:
             if os.path.exists(p):
                 print(f"Using font: {p}")
                 return p
-        raise FileNotFoundError("No bold font found on this system.")
+        raise FileNotFoundError("No bold font found.")
 
     def _get_bg_colors(self, topic):
-        """Dynamic gradient based on topic hash so each video looks different"""
         palettes = [
-            ([139, 92, 246], [37, 99, 235]),    # purple → blue
-            ([239, 68, 68], [234, 88, 12]),      # red → orange
-            ([16, 185, 129], [6, 95, 70]),       # green → dark green
-            ([59, 130, 246], [124, 58, 237]),    # blue → violet
-            ([245, 158, 11], [239, 68, 68]),     # amber → red
-            ([236, 72, 153], [139, 92, 246]),    # pink → purple
+            ([139, 92, 246], [37, 99, 235]),
+            ([239, 68, 68], [234, 88, 12]),
+            ([16, 185, 129], [6, 95, 70]),
+            ([59, 130, 246], [124, 58, 237]),
+            ([245, 158, 11], [239, 68, 68]),
+            ([236, 72, 153], [139, 92, 246]),
         ]
-        idx = hash(topic) % len(palettes)
+        idx = abs(hash(topic)) % len(palettes)
         return palettes[idx]
 
     def _create_background(self, top_color, bottom_color):
+        """Create RGB background directly — no RGBA to avoid memory bloat"""
         gradient = np.linspace(0, 1, self.height)
-        top = np.array(top_color)
-        bot = np.array(bottom_color)
+        top = np.array(top_color, dtype=np.float32)
+        bot = np.array(bottom_color, dtype=np.float32)
         gradient = gradient[:, np.newaxis, np.newaxis]
         arr = (gradient * bot + (1 - gradient) * top).astype(np.uint8)
-        return Image.fromarray(np.repeat(arr, self.width, axis=1))
+        bg = np.repeat(arr, self.width, axis=1)
+        return Image.fromarray(bg, mode='RGB')
 
     def _draw_text(self, draw, text, x, y, font_size, color, max_width=None):
+        # Strip alpha from color if present for RGB image
+        if isinstance(color, tuple) and len(color) == 4:
+            color = color[:3]
         font = ImageFont.truetype(self.font_bold, font_size)
         max_w = max_width or (self.width - 80)
         words = text.split()
@@ -84,60 +87,52 @@ class ShortsGenerator:
                     current = []
         if current:
             lines.append(' '.join(current))
-
         line_h = font_size * 1.3
         start_y = y - (len(lines) * line_h) / 2
         for i, line in enumerate(lines):
             ly = start_y + i * line_h
-            # shadow
-            draw.text((x + 3, ly + 3), line, font=font, fill=(0, 0, 0, 130), anchor="mm")
-            # main text
+            draw.text((x + 3, ly + 3), line, font=font, fill=(0, 0, 0), anchor="mm")
             draw.text((x, ly), line, font=font, fill=color, anchor="mm")
 
-    def _draw_pill(self, draw, x, y, w, h, color):
-        """Draw a rounded rectangle pill shape"""
-        r = h // 2
-        draw.ellipse([x, y, x + h, y + h], fill=color)
-        draw.ellipse([x + w - h, y, x + w, y + h], fill=color)
-        draw.rectangle([x + r, y, x + w - r, y + h], fill=color)
-
-    def _create_frame(self, bg, topic, caption_lines, current_line_idx, progress=1.0):
-        frame = bg.copy()
-        draw = ImageDraw.Draw(frame, 'RGBA')
+    def _create_frame(self, bg, topic, caption_lines, current_line_idx):
+        """Create RGB frame — no RGBA mode, no alpha, no memory issues"""
+        frame = bg.copy()  # RGB copy
+        draw = ImageDraw.Draw(frame)  # plain RGB draw
         cx = self.width // 2
 
-        # Top label pill
-        pill_w, pill_h = 400, 60
-        pill_x = cx - pill_w // 2
-        self._draw_pill(draw, pill_x, 80, pill_w, pill_h, (255, 255, 255, 40))
-        self._draw_text(draw, "TRENDING NOW", cx, 110, 28, (255, 255, 255, 220))
+        # Top badge
+        draw.rectangle([cx - 200, 70, cx + 200, 130], fill=(255, 255, 255, ))
+        self._draw_text(draw, "TRENDING NOW", cx, 100, 30, (50, 50, 50))
 
         # Topic title
-        self._draw_text(draw, topic.upper(), cx, 230, 52, (255, 255, 255, 255))
+        self._draw_text(draw, topic.upper(), cx, 220, 54, (255, 255, 255))
 
-        # Divider line
-        draw.line([(cx - 200, 290), (cx + 200, 290)], fill=(255, 255, 255, 80), width=2)
+        # Divider
+        draw.line([(cx - 180, 275), (cx + 180, 275)], fill=(255, 255, 255), width=2)
 
-        # Caption lines - show completed lines + current animating line
-        start_y = 700
-        line_spacing = 160
+        # Caption lines
+        start_y = 650
+        line_spacing = 155
         for i, line in enumerate(caption_lines):
             if i > current_line_idx:
                 break
-            alpha = 255 if i < current_line_idx else int(255 * progress)
-            color = (255, 220, 0, alpha) if i == current_line_idx else (255, 255, 255, 200)
-            font_size = 68 if i == current_line_idx else 58
-            y = start_y + i * line_spacing
-            self._draw_text(draw, line, cx, y, font_size, color)
+            if i == current_line_idx:
+                color = (255, 220, 0)   # yellow = current line
+                font_size = 70
+            else:
+                color = (220, 220, 220)  # light grey = done lines
+                font_size = 56
+            y_pos = start_y + i * line_spacing
+            self._draw_text(draw, line, cx, y_pos, font_size, color)
 
-        # Bottom CTA
-        self._draw_text(draw, "Follow for more! 🔥", cx, 1820, 42, (255, 220, 0, 255))
+        # CTA bottom
+        self._draw_text(draw, "Follow for more!", cx, 1840, 44, (255, 220, 0))
 
-        return np.array(frame.convert('RGB'))
+        return np.array(frame)  # RGB numpy array — clean
 
     def _create_silence(self, duration, path="silence.wav"):
         rate = 44100
-        data = np.zeros(int(duration * rate)).astype(np.int16)
+        data = np.zeros(int(duration * rate), dtype=np.int16)
         wavfile.write(path, rate, data)
         return path
 
@@ -148,15 +143,14 @@ class ShortsGenerator:
         files = [f for f in os.listdir(folder) if f.endswith(('.mp3', '.wav'))]
         return os.path.join(folder, random.choice(files)) if files else None
 
-    def generate_video(self, content, output_path):
+    def generate_video(self, content, output_path="short.mp4"):
         topic = content["topic"]
         script = content["script"]
         cleanup_video_files(output_path)
 
-        # Split script into caption lines (max 7 words per line)
+        # Split into caption lines
         words = script.split()
-        caption_lines = []
-        chunk = []
+        caption_lines, chunk = [], []
         for w in words:
             chunk.append(w)
             if len(chunk) >= 7 or w.endswith(('.', '!', '?')):
@@ -164,24 +158,24 @@ class ShortsGenerator:
                 chunk = []
         if chunk:
             caption_lines.append(' '.join(chunk))
-        caption_lines = caption_lines[:8]  # max 8 lines for screen space
+        caption_lines = caption_lines[:8]
 
         top_c, bot_c = self._get_bg_colors(topic)
         bg = self._create_background(top_c, bot_c)
 
-        print(f"Generating TTS audio...")
+        print("Generating TTS audio...")
         tts = gTTS(text=script, lang='en', slow=False)
         voice_path = "voice.mp3"
         tts.save(voice_path)
         voice_clip = AudioFileClip(voice_path)
-        total_dur = voice_clip.duration + 1.5  # +1.5s ending hold
+        total_dur = voice_clip.duration + 1.5
 
-        silence_path = self._create_silence(total_dur + 2)
-        silence = AudioFileClip(silence_path)
-
-        print(f"Rendering {total_dur:.1f}s video with {len(caption_lines)} caption lines...")
-        writer = imageio.get_writer(output_path, fps=self.fps, codec='h264',
-                                    quality=9, pixelformat='yuv420p', macro_block_size=8)
+        print(f"Rendering {total_dur:.1f}s @ {self.fps}fps with {len(caption_lines)} caption lines...")
+        writer = imageio.get_writer(
+            output_path, fps=self.fps,
+            codec='libx264', quality=8,
+            pixelformat='yuv420p', macro_block_size=None
+        )
 
         frames_total = int(total_dur * self.fps)
         time_per_line = voice_clip.duration / max(len(caption_lines), 1)
@@ -189,13 +183,11 @@ class ShortsGenerator:
         for frame_i in range(frames_total):
             t = frame_i / self.fps
             line_idx = min(int(t / time_per_line), len(caption_lines) - 1)
-            line_progress = (t % time_per_line) / time_per_line
-            frame = self._create_frame(bg, topic, caption_lines, line_idx, line_progress)
+            frame = self._create_frame(bg, topic, caption_lines, line_idx)
             writer.append_data(frame)
 
         writer.close()
 
-        # Mix voice + background music
         music_path = self._get_music()
         if music_path:
             try:
@@ -206,7 +198,7 @@ class ShortsGenerator:
                 bg_music = bg_music.subclip(0, total_dur)
                 final_audio = CompositeAudioClip([bg_music, voice_clip])
             except Exception as e:
-                print(f"Music error: {e}, using voice only")
+                print(f"Music error: {e}")
                 final_audio = voice_clip
         else:
             final_audio = voice_clip
@@ -218,35 +210,28 @@ class ShortsGenerator:
 
         video.close()
         voice_clip.close()
-        final_audio.close()
         if os.path.exists(voice_path):
             os.remove(voice_path)
-        if os.path.exists(silence_path):
-            os.remove(silence_path)
+        if os.path.exists("silence.wav"):
+            os.remove("silence.wav")
 
-        print(f"✅ Video saved: {final_path}")
+        print(f"Video ready: {final_path}")
         return final_path
 
 
 if __name__ == "__main__":
     api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("RIDDLE_API_KEY", "")
-
-    print("🔍 Fetching trending topic + generating script...")
+    print("Fetching trending topic...")
     content = get_content(api_key)
-
-    print(f"\n📌 Topic   : {content['topic']}")
-    print(f"📝 Title   : {content['title']}")
-    print(f"🏷  Tags    : {', '.join(content['tags'][:5])}")
-    print(f"📜 Script  : {content['script'][:120]}...\n")
+    print(f"Topic  : {content['topic']}")
+    print(f"Title  : {content['title']}")
+    print(f"Script : {content['script'][:100]}...")
 
     generator = ShortsGenerator()
-    output = "short.mp4"
-
-    print("🎬 Generating video...")
-    final_path = generator.generate_video(content, output)
+    final_path = generator.generate_video(content)
 
     if final_path and os.path.exists(final_path):
-        upload = input("\n✅ Video ready! Upload to YouTube? (y/n): ").strip().lower()
+        upload = input("Upload to YouTube? (y/n): ").strip().lower()
         if upload == 'y':
             uploader = YouTubeShortsUploader(
                 client_secrets_file='client-secret.json',
@@ -255,11 +240,11 @@ if __name__ == "__main__":
             )
             video_id = uploader.upload_short(final_path, content)
             if video_id:
-                print(f"🚀 Uploaded! https://youtube.com/shorts/{video_id}")
-                cleanup_video_files(output)
+                print(f"Uploaded: https://youtube.com/shorts/{video_id}")
+                cleanup_video_files("short.mp4")
             else:
-                print("❌ Upload failed.")
+                print("Upload failed.")
         else:
-            print(f"Video saved at: {final_path}")
+            print(f"Saved at: {final_path}")
     else:
-        print("❌ Video generation failed.")
+        print("Video generation failed.")

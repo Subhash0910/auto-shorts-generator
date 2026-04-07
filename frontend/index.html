@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto Shorts Generator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    .navbar {
+      background: #1a1a2e;
+      padding: 16px 32px;
+      border-bottom: 1px solid #2d2d4e;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .navbar h1 { font-size: 20px; font-weight: 700; color: #a78bfa; }
+    .navbar span { font-size: 13px; color: #64748b; }
+    .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2d2d4e;
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+    .card h2 { font-size: 16px; font-weight: 600; color: #a78bfa; margin-bottom: 20px; }
+    .btn {
+      padding: 12px 28px;
+      border-radius: 10px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: white;
+    }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-success {
+      background: linear-gradient(135deg, #059669, #10b981);
+      color: white;
+    }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid #4f46e5;
+      color: #a78bfa;
+    }
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #0f0f1a;
+      border-radius: 10px;
+      margin-top: 16px;
+      font-size: 14px;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-idle { background: #475569; }
+    .dot-running { background: #f59e0b; animation: pulse 1s infinite; }
+    .dot-done { background: #10b981; }
+    .dot-error { background: #ef4444; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+    .content-preview {
+      background: #0f0f1a;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 16px;
+      font-size: 13px;
+      line-height: 1.8;
+    }
+    .label { color: #7c3aed; font-weight: 600; }
+    .script-text { color: #cbd5e1; margin-top: 4px; font-style: italic; }
+    .actions { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+    .upload-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: #ff0000;
+      color: white;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .history-item {
+      padding: 14px;
+      border-bottom: 1px solid #2d2d4e;
+      font-size: 13px;
+    }
+    .history-item:last-child { border-bottom: none; }
+    .history-title { font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
+    .history-meta { color: #64748b; font-size: 12px; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+    }
+    .toggle-row label { font-size: 14px; color: #94a3b8; }
+    input[type=checkbox] {
+      width: 18px; height: 18px; accent-color: #7c3aed; cursor: pointer;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-purple { background: #4c1d95; color: #c4b5fd; }
+    .badge-green { background: #064e3b; color: #6ee7b7; }
+    .badge-yellow { background: #78350f; color: #fcd34d; }
+    .badge-red { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar">
+  <h1>Auto Shorts Generator</h1>
+  <span>Trending topics → YouTube Shorts, fully automated</span>
+</nav>
+
+<div class="container">
+
+  <!-- Generate Card -->
+  <div class="card">
+    <h2>Generate New Short</h2>
+    <div class="toggle-row">
+      <label>Auto-upload to YouTube after rendering</label>
+      <input type="checkbox" id="autoUpload" />
+    </div>
+    <button class="btn btn-primary" id="generateBtn" onclick="startGenerate()">
+      Generate Short
+    </button>
+    <div class="status-bar" id="statusBar">
+      <div class="dot dot-idle" id="dot"></div>
+      <span id="statusText">Idle — click Generate to start</span>
+    </div>
+  </div>
+
+  <!-- Preview Card -->
+  <div class="card" id="previewCard" style="display:none">
+    <h2>Content Preview</h2>
+    <div class="content-preview" id="contentPreview"></div>
+    <div class="actions" id="actionBtns"></div>
+  </div>
+
+  <!-- History Card -->
+  <div class="card">
+    <h2>Upload History</h2>
+    <div id="historyList"><span style="color:#475569;font-size:13px">No uploads yet</span></div>
+  </div>
+
+</div>
+
+<script>
+  let currentJobId = null;
+  let pollInterval = null;
+
+  async function startGenerate() {
+    const btn = document.getElementById('generateBtn');
+    const autoUpload = document.getElementById('autoUpload').checked;
+    btn.disabled = true;
+    setStatus('running', 'Fetching trending topic...');
+    document.getElementById('previewCard').style.display = 'none';
+    document.getElementById('actionBtns').innerHTML = '';
+
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ auto_upload: autoUpload })
+    });
+    const data = await res.json();
+    currentJobId = data.job_id;
+    pollInterval = setInterval(pollStatus, 2000);
+  }
+
+  async function pollStatus() {
+    if (!currentJobId) return;
+    const res = await fetch(`/api/status/${currentJobId}`);
+    const job = await res.json();
+
+    const messages = {
+      queued: 'Queued...',
+      generating_script: 'Generating script with AI...',
+      rendering_video: 'Rendering video frames...',
+      uploading: 'Uploading to YouTube...',
+      done: 'Video ready!',
+      uploaded: 'Uploaded to YouTube!',
+      upload_failed: 'Upload failed — you can retry manually',
+      error: 'Error: ' + (job.error || 'Unknown')
+    };
+
+    const isDone = ['done', 'uploaded', 'upload_failed', 'error'].includes(job.status);
+    const dotClass = job.status === 'error' ? 'dot-error' : isDone ? 'dot-done' : 'dot-running';
+    setStatus(job.status === 'error' ? 'error' : isDone ? 'done' : 'running', messages[job.status] || job.status, dotClass);
+
+    if (job.content) showPreview(job);
+
+    if (isDone) {
+      clearInterval(pollInterval);
+      document.getElementById('generateBtn').disabled = false;
+      if (job.status === 'done' || job.status === 'upload_failed') showActions(job);
+      if (job.status === 'uploaded') showYouTubeLink(job);
+    }
+  }
+
+  function setStatus(type, text) {
+    document.getElementById('statusText').textContent = text;
+    const dot = document.getElementById('dot');
+    dot.className = 'dot ' + (type === 'running' ? 'dot-running' : type === 'done' ? 'dot-done' : type === 'error' ? 'dot-error' : 'dot-idle');
+  }
+
+  function showPreview(job) {
+    const c = job.content;
+    document.getElementById('previewCard').style.display = 'block';
+    document.getElementById('contentPreview').innerHTML = `
+      <div><span class="label">Topic:</span> ${c.topic}</div>
+      <div style="margin-top:8px"><span class="label">Title:</span> ${c.title}</div>
+      <div style="margin-top:8px"><span class="label">Tags:</span> ${c.tags.slice(0,6).join(', ')}</div>
+      <div style="margin-top:10px" class="script-text">${c.script}</div>
+    `;
+  }
+
+  function showActions(job) {
+    document.getElementById('actionBtns').innerHTML = `
+      <a href="/api/download/${currentJobId}" class="btn btn-outline" style="text-decoration:none;padding:12px 24px;border-radius:10px;border:1px solid #4f46e5;color:#a78bfa;font-weight:600;font-size:14px">Download Video</a>
+      <button class="btn btn-success" onclick="uploadToYouTube()">Upload to YouTube</button>
+    `;
+  }
+
+  function showYouTubeLink(job) {
+    document.getElementById('actionBtns').innerHTML = `
+      <a href="${job.youtube_url}" target="_blank" class="upload-link">View on YouTube</a>
+    `;
+    loadHistory();
+  }
+
+  async function uploadToYouTube() {
+    setStatus('running', 'Uploading to YouTube...');
+    const res = await fetch(`/api/upload/${currentJobId}`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showYouTubeLink({ youtube_url: data.url });
+      setStatus('done', 'Uploaded to YouTube!');
+    } else {
+      setStatus('error', 'Upload failed: ' + (data.error || 'Unknown error'));
+    }
+  }
+
+  async function loadHistory() {
+    const res = await fetch('/api/history');
+    const history = await res.json();
+    const el = document.getElementById('historyList');
+    if (!history.length) { el.innerHTML = '<span style="color:#475569;font-size:13px">No uploads yet</span>'; return; }
+    el.innerHTML = history.slice().reverse().slice(0, 10).map(h => `
+      <div class="history-item">
+        <div class="history-title">${h.title}</div>
+        <div class="history-meta">${h.upload_time} &mdash; <a href="https://youtube.com/watch?v=${h.video_id}" target="_blank" style="color:#7c3aed">youtube.com/shorts/${h.video_id}</a></div>
+      </div>
+    `).join('');
+  }
+
+  loadHistory();
+</script>
+
+</body>
+</html>
