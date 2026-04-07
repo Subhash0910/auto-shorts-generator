@@ -38,7 +38,6 @@ def _ffmpeg(*args):
 
 
 # ─── Font ─────────────────────────────────────────────────────────────────────
-# Drop Anton-Regular.ttf in assets/fonts/ — free from Google Fonts
 FONT_PATHS = [
     "assets/fonts/Anton-Regular.ttf",
     "assets/fonts/Montserrat-ExtraBold.ttf",
@@ -54,9 +53,8 @@ def get_font(size):
     return ImageFont.load_default()
 
 
-# ─── Background: Pexels or Local Gameplay/Skeleton Folder ─────────────────────
+# ─── Background Sources ───────────────────────────────────────────────────────
 def get_local_footage(folder):
-    """Pick a random video from a local folder (gameplay/, skeleton/, etc.)"""
     if not os.path.exists(folder):
         return None
     clips = [f for f in os.listdir(folder) if f.lower().endswith(('.mp4', '.mov', '.webm'))]
@@ -72,7 +70,7 @@ def get_pexels_footage(topic, duration_needed, api_key):
         return None
     try:
         keywords = topic.split()[:3]
-        search_terms = [' '.join(keywords[:2]), keywords[0], 'nature cinematic', 'abstract dark']
+        search_terms = [' '.join(keywords[:2]), keywords[0], 'abstract dark cinematic']
         for kw in search_terms:
             url = f"https://api.pexels.com/videos/search?query={kw}&per_page=15&orientation=portrait"
             r = requests.get(url, headers={'Authorization': api_key}, timeout=15)
@@ -109,13 +107,12 @@ def resize_footage_ffmpeg(input_path, output_path, width=WIDTH, height=HEIGHT):
 
 
 def create_gradient_bg_video(duration, topic, fps=FPS, output='bg.mp4'):
-    """Cinematic dark gradient fallback — better than flat colors"""
     palettes = [
-        ([15, 15, 30], [40, 10, 60]),    # deep space purple
-        ([10, 20, 40], [5, 40, 80]),     # midnight blue
-        ([30, 5, 5], [60, 15, 10]),      # dark red
-        ([5, 25, 20], [10, 50, 40]),     # dark teal
-        ([20, 10, 30], [50, 20, 60]),    # violet
+        ([15, 15, 30],  [40, 10, 60]),
+        ([10, 20, 40],  [5, 40, 80]),
+        ([30, 5, 5],    [60, 15, 10]),
+        ([5, 25, 20],   [10, 50, 40]),
+        ([20, 10, 30],  [50, 20, 60]),
     ]
     idx = abs(hash(topic)) % len(palettes)
     top, bot = [np.array(c) for c in palettes[idx]]
@@ -137,9 +134,8 @@ def create_gradient_bg_video(duration, topic, fps=FPS, output='bg.mp4'):
     return output
 
 
-# ─── Ken Burns Zoom ────────────────────────────────────────────────────────────
+# ─── Ken Burns ────────────────────────────────────────────────────────────────
 def apply_ken_burns(clip, zoom_start=1.0, zoom_end=1.06):
-    """Slow cinematic zoom over clip duration — makes stock footage look intentional"""
     duration = clip.duration
     def zoom_frame(get_frame, t):
         frame = get_frame(t)
@@ -150,22 +146,17 @@ def apply_ken_burns(clip, zoom_start=1.0, zoom_end=1.06):
         new_h = int(h * scale)
         img = Image.fromarray(frame)
         img = img.resize((new_w, new_h), Image.LANCZOS)
-        # Crop center
         left = (new_w - w) // 2
-        top = (new_h - h) // 2
+        top  = (new_h - h) // 2
         img = img.crop((left, top, left + w, top + h))
         return np.array(img)
     return clip.fl(zoom_frame, apply_to=['mask'])
 
 
-# ─── Hook Frame (first 2.5s) ───────────────────────────────────────────────────
+# ─── Hook Frame ───────────────────────────────────────────────────────────────
 def build_hook_frame(hook_text, width=WIDTH):
-    """Full-width semi-transparent dark bar with bold centered hook text"""
     bar_h = 340
     img = Image.new('RGBA', (width, bar_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    # Dark semi-transparent background
     overlay = Image.new('RGBA', (width, bar_h), (0, 0, 0, 210))
     img = Image.alpha_composite(img, overlay)
     draw = ImageDraw.Draw(img)
@@ -173,7 +164,6 @@ def build_hook_frame(hook_text, width=WIDTH):
     font_large = get_font(88)
     font_small = get_font(58)
 
-    # Word wrap
     words = hook_text.upper().split()
     lines, line = [], []
     for word in words:
@@ -194,36 +184,29 @@ def build_hook_frame(hook_text, width=WIDTH):
     line_h = int((88 if len(lines) <= 2 else 58) * 1.3)
     total_h = len(lines) * line_h
     start_y = (bar_h - total_h) // 2
-
     cx = width // 2
+
     for i, ln in enumerate(lines):
         y = start_y + i * line_h
-        # Cyan glow shadow
         for dx, dy in [(-3, 0), (3, 0), (0, -3), (0, 3)]:
-            draw.text((cx + dx, y + dy), ln, font=font, fill=(0, 255, 220, 120), anchor='mt')
+            draw.text((cx+dx, y+dy), ln, font=font, fill=(0, 255, 220, 120), anchor='mt')
         draw.text((cx, y), ln, font=font, fill=(255, 255, 255, 255), anchor='mt')
 
     return np.array(img)
 
 
-# ─── Word-Highlight Captions ───────────────────────────────────────────────────
+# ─── Word-Highlight Captions ──────────────────────────────────────────────────
 def build_word_highlight_caption(words_in_segment, active_index, width=WIDTH):
-    """
-    Renders a caption strip where the active word is on a bright pill
-    and surrounding words are dimmed. Viral word-highlight style.
-    """
     height = 200
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     font = get_font(82)
 
-    ACTIVE_BG   = (0, 220, 180, 255)   # cyan pill
-    ACTIVE_TEXT = (0, 0, 0, 255)       # black text on cyan
-    DIM_TEXT    = (200, 200, 200, 180) # dimmed white for inactive
+    ACTIVE_BG   = (0, 220, 180, 255)
+    ACTIVE_TEXT = (0, 0, 0, 255)
+    DIM_TEXT    = (200, 200, 200, 180)
 
-    # Measure total row width
-    padding_x = 22
-    padding_y = 12
+    padding_x, padding_y = 22, 12
     word_sizes = []
     for w in words_in_segment:
         bbox = draw.textbbox((0, 0), w, font=font)
@@ -231,75 +214,82 @@ def build_word_highlight_caption(words_in_segment, active_index, width=WIDTH):
 
     gap = 18
     total_w = sum(ws[0] + padding_x * 2 for ws in word_sizes) + gap * (len(words_in_segment) - 1)
+
+    # If too wide, reduce font
+    if total_w > width - 40:
+        font = get_font(62)
+        word_sizes = []
+        for w in words_in_segment:
+            bbox = draw.textbbox((0, 0), w, font=font)
+            word_sizes.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+        total_w = sum(ws[0] + padding_x * 2 for ws in word_sizes) + gap * (len(words_in_segment) - 1)
+
     start_x = max((width - total_w) // 2, 20)
     cy = height // 2
-
     x = start_x
+
     for i, (word, (w_w, w_h)) in enumerate(zip(words_in_segment, word_sizes)):
         pill_w = w_w + padding_x * 2
         pill_h = w_h + padding_y * 2
-        pill_top = cy - pill_h // 2
-        pill_left = x
-        pill_right = x + pill_w
+        pill_top    = cy - pill_h // 2
+        pill_left   = x
+        pill_right  = x + pill_w
         pill_bottom = pill_top + pill_h
         text_x = x + pill_w // 2
         text_y = cy
 
         if i == active_index:
-            # Bright cyan pill
-            draw.rounded_rectangle(
-                [pill_left, pill_top, pill_right, pill_bottom],
-                radius=16, fill=ACTIVE_BG
-            )
+            draw.rounded_rectangle([pill_left, pill_top, pill_right, pill_bottom],
+                                   radius=16, fill=ACTIVE_BG)
             draw.text((text_x, text_y), word, font=font,
                       fill=ACTIVE_TEXT, anchor='mm')
         else:
-            # Dark background pill for readability + dimmed text
-            draw.rounded_rectangle(
-                [pill_left, pill_top, pill_right, pill_bottom],
-                radius=16, fill=(0, 0, 0, 100)
-            )
+            draw.rounded_rectangle([pill_left, pill_top, pill_right, pill_bottom],
+                                   radius=16, fill=(0, 0, 0, 100))
             draw.text((text_x, text_y), word, font=font,
                       fill=DIM_TEXT, anchor='mm')
-
         x += pill_w + gap
 
     return np.array(img)
 
 
-# ─── Main Assembly ─────────────────────────────────────────────────────────────
+# ─── Main Assembly ────────────────────────────────────────────────────────────
 def assemble_video(topic, voice_path, word_timestamps, caption_segments,
                    output_path="short.mp4", pexels_key=None,
-                   local_footage_folder=None, hook_text=None):
-
+                   local_footage_folder=None, hook_text=None,
+                   prebuilt_bg=None):
+    """
+    prebuilt_bg: path to a pre-assembled background .mp4
+                 (used by cinematic mode from character_engine)
+    """
     voice = AudioFileClip(voice_path)
     total_dur = voice.duration + 1.0
     print(f"Total duration: {total_dur:.1f}s")
 
-    # ── 1. Background ──────────────────────────────────────────────────────────
-    footage_raw = None
-
-    # Priority: local folder (skeleton/gameplay) > Pexels > gradient
-    if local_footage_folder:
-        footage_raw = get_local_footage(local_footage_folder)
-
-    if not footage_raw and pexels_key:
-        footage_raw = get_pexels_footage(topic, total_dur, pexels_key)
-
-    if footage_raw:
-        bg_path = 'bg_resized.mp4'
-        resize_footage_ffmpeg(footage_raw, bg_path)
-        # Clean up downloaded file only (not local folder clips)
-        if not local_footage_folder or footage_raw not in [
-            os.path.join(local_footage_folder, f) for f in os.listdir(local_footage_folder or '.')
-        ]:
-            try: os.remove(footage_raw)
-            except: pass
-        if not os.path.exists(bg_path) or os.path.getsize(bg_path) < 1000:
-            print("Footage resize failed, using gradient")
-            bg_path = create_gradient_bg_video(total_dur, topic)
+    # ── 1. Background ─────────────────────────────────────────────────────────
+    if prebuilt_bg and os.path.exists(prebuilt_bg):
+        bg_path = prebuilt_bg
+        print(f"Using prebuilt background: {bg_path}")
     else:
-        bg_path = create_gradient_bg_video(total_dur, topic)
+        footage_raw = None
+        if local_footage_folder:
+            footage_raw = get_local_footage(local_footage_folder)
+        if not footage_raw and pexels_key:
+            footage_raw = get_pexels_footage(topic, total_dur, pexels_key)
+
+        if footage_raw:
+            bg_path = 'bg_resized.mp4'
+            resize_footage_ffmpeg(footage_raw, bg_path)
+            is_temp = not (local_footage_folder and
+                           os.path.abspath(footage_raw).startswith(
+                               os.path.abspath(local_footage_folder)))
+            if is_temp:
+                try: os.remove(footage_raw)
+                except: pass
+            if not os.path.exists(bg_path) or os.path.getsize(bg_path) < 1000:
+                bg_path = create_gradient_bg_video(total_dur, topic)
+        else:
+            bg_path = create_gradient_bg_video(total_dur, topic)
 
     bg = VideoFileClip(bg_path)
     if bg.duration < total_dur:
@@ -307,10 +297,11 @@ def assemble_video(topic, voice_path, word_timestamps, caption_segments,
         bg = concatenate_videoclips([bg] * loops)
     bg = bg.subclip(0, total_dur).without_audio()
 
-    # ── 2. Ken Burns zoom ─────────────────────────────────────────────────────
-    bg = apply_ken_burns(bg, zoom_start=1.0, zoom_end=1.06)
+    # ── 2. Ken Burns (skip on prebuilt bg — already has it per-clip) ──────────
+    if not prebuilt_bg:
+        bg = apply_ken_burns(bg, zoom_start=1.0, zoom_end=1.06)
 
-    # ── 3. Hook overlay (first 2.5s) ──────────────────────────────────────────
+    # ── 3. Hook overlay ───────────────────────────────────────────────────────
     overlay_clips = []
     if hook_text:
         hook_arr = build_hook_frame(hook_text)
@@ -324,34 +315,24 @@ def assemble_video(topic, voice_path, word_timestamps, caption_segments,
 
     # ── 4. Word-highlight captions ────────────────────────────────────────────
     caption_clips = []
+    WORDS_PER_LINE = 3
 
     if word_timestamps:
-        # Build per-word clips for true word-highlight effect
-        # Group into lines of max 3 words for readability
-        WORDS_PER_LINE = 3
-        words = word_timestamps
         i = 0
-        while i < len(words):
-            group = words[i:i + WORDS_PER_LINE]
+        while i < len(word_timestamps):
+            group = word_timestamps[i:i + WORDS_PER_LINE]
             word_texts = [w['word'] for w in group]
-            group_start = group[0]['start']
-            group_end = group[-1]['start'] + group[-1]['duration']
-
             for active_idx, w in enumerate(group):
-                word_start = w['start']
-                word_end = w['start'] + w['duration']
-
                 arr = build_word_highlight_caption(word_texts, active_idx)
                 clip = (
                     ImageClip(arr)
-                    .set_start(word_start)
-                    .set_end(min(word_end + 0.05, total_dur))
+                    .set_start(w['start'])
+                    .set_end(min(w['start'] + w['duration'] + 0.05, total_dur))
                     .set_position(('center', HEIGHT - 380))
                 )
                 caption_clips.append(clip)
             i += WORDS_PER_LINE
     else:
-        # Fallback: segment-based captions
         for seg in caption_segments:
             if not seg['text'].strip():
                 continue
@@ -366,18 +347,19 @@ def assemble_video(topic, voice_path, word_timestamps, caption_segments,
             caption_clips.append(clip)
 
     # ── 5. Compose ────────────────────────────────────────────────────────────
-    all_clips = [bg] + overlay_clips + caption_clips
-    final_video = CompositeVideoClip(all_clips, size=(WIDTH, HEIGHT))
+    final_video = CompositeVideoClip(
+        [bg] + overlay_clips + caption_clips,
+        size=(WIDTH, HEIGHT)
+    )
 
     # ── 6. Audio ──────────────────────────────────────────────────────────────
     final_audio = voice
-    music_folder = "music"
-    if os.path.exists(music_folder):
-        music_files = [f for f in os.listdir(music_folder) if f.endswith(('.mp3', '.wav'))]
+    if os.path.exists("music"):
+        music_files = [f for f in os.listdir("music") if f.endswith(('.mp3', '.wav'))]
         if music_files:
             try:
                 music = AudioFileClip(
-                    os.path.join(music_folder, random.choice(music_files))
+                    os.path.join("music", random.choice(music_files))
                 ).volumex(0.06)
                 if music.duration < total_dur:
                     music = concatenate_audioclips(

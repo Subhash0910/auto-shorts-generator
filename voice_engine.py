@@ -9,8 +9,18 @@ VOICES = [
 ]
 
 
+def _get_ffmpeg():
+    """Always use the bundled FFmpeg from imageio-ffmpeg — fixes Windows PATH issue"""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return 'ffmpeg'
+
+FFMPEG = _get_ffmpeg()
+
+
 def _estimate_timestamps(script, duration):
-    """Build word-level timestamps from total duration (uniform distribution)"""
     words = script.split()
     if not words:
         return []
@@ -22,7 +32,6 @@ def _estimate_timestamps(script, duration):
 
 
 def _try_edge_tts(script, output_path, voice):
-    """Attempt edge-tts, return word_data or None on failure"""
     try:
         import edge_tts
 
@@ -41,16 +50,29 @@ def _try_edge_tts(script, output_path, voice):
                     })
             if not audio_chunks:
                 return None
+
             raw = output_path.replace('.mp3', '_raw.mp3')
             with open(raw, 'wb') as f:
                 for c in audio_chunks:
                     f.write(c)
-            subprocess.run(
-                ['ffmpeg', '-y', '-i', raw, '-ar', '44100', '-ac', '2', output_path],
+
+            # ✅ FIX: use bundled FFmpeg binary, not system PATH
+            result = subprocess.run(
+                [FFMPEG, '-y', '-i', raw, '-ar', '44100', '-ac', '2',
+                 '-acodec', 'libmp3lame', '-q:a', '2', output_path],
                 capture_output=True
             )
+            if result.returncode != 0:
+                print(f"FFmpeg audio convert warning: {result.stderr.decode()[-200:]}")
+
             if os.path.exists(raw):
                 os.remove(raw)
+
+            # Verify output file is valid
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+                print("Audio output too small, something went wrong")
+                return None
+
             return word_data if word_data else None
 
         result = asyncio.run(_run())
@@ -63,12 +85,14 @@ def _try_edge_tts(script, output_path, voice):
 
 
 def _use_gtts(script, output_path):
-    """gTTS fallback - always works, estimates timestamps"""
     from gtts import gTTS
     from moviepy.editor import AudioFileClip
-    print("Using gTTS...")
+    print("Using gTTS fallback...")
     tts = gTTS(text=script, lang='en', slow=False)
     tts.save(output_path)
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        print("gTTS output invalid")
+        return []
     dur = AudioFileClip(output_path).duration
     word_data = _estimate_timestamps(script, dur)
     print(f"gTTS ready: {len(word_data)} words, {dur:.1f}s")
@@ -80,12 +104,13 @@ def generate_voice(script, output_path="voice.mp3", voice=None):
         voice = VOICES[0]
     print(f"Voice engine: trying edge-tts ({voice})...")
     word_data = _try_edge_tts(script, output_path, voice)
-    if word_data and os.path.exists(output_path):
+    if word_data and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
         return word_data
+    print("Falling back to gTTS...")
     return _use_gtts(script, output_path)
 
 
-def words_to_caption_segments(word_data, words_per_caption=4):
+def words_to_caption_segments(word_data, words_per_caption=3):
     segments = []
     i = 0
     while i < len(word_data):
@@ -100,7 +125,7 @@ def words_to_caption_segments(word_data, words_per_caption=4):
 
 if __name__ == '__main__':
     words = generate_voice(
-        "Nobody talks about this but black holes are actually portals. Follow for more!",
+        "Nobody talks about this but your bones are stronger than concrete. Follow for more!",
         'test_voice.mp3'
     )
     segs = words_to_caption_segments(words)
