@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import numpy as np
 import imageio

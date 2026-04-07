@@ -1,18 +1,20 @@
-from openai import OpenAI
+from groq import Groq
 import json
 from riddle_history import RiddleHistory
 
+
 class RiddleGenerator:
     def __init__(self, api_key):
-        self.client = OpenAI(api_key=api_key)
+        self.client = Groq(api_key=api_key)
         self.history = RiddleHistory()
         
     def _generate_riddle_batch(self, count):
-        """Generate a batch of riddles from OpenAI"""
+        """Generate a batch of riddles from Groq"""
         prompt = f"""Generate {count} unique, creative riddles with their answers. 
         Each riddle should be different from common, well-known riddles.
         Make them engaging but not too difficult.
         Format as JSON array of objects with 'question' and 'answer' fields.
+        Return ONLY the JSON array, no extra text.
         
         Guidelines:
         - Avoid common riddles like "what has keys but no locks"
@@ -22,9 +24,9 @@ class RiddleGenerator:
         """
         
         response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.8  # Increased for more variety
+            temperature=0.8
         )
         
         try:
@@ -38,12 +40,10 @@ class RiddleGenerator:
         attempts = 0
         
         while len(unique_riddles) < count and attempts < max_attempts:
-            # Generate more riddles than needed to increase chances of finding unique ones
             batch_size = (count - len(unique_riddles)) * 2
             riddles = self._generate_riddle_batch(batch_size)
             
             if riddles:
-                # Filter out previously used riddles
                 for riddle in riddles:
                     if not self.history.is_riddle_used(riddle):
                         unique_riddles.append(riddle)
@@ -52,7 +52,6 @@ class RiddleGenerator:
             
             attempts += 1
         
-        # Add the new unique riddles to history
         if unique_riddles:
             self.history.add_riddles(unique_riddles)
             
